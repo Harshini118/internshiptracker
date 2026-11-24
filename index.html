@@ -18,6 +18,7 @@
 <div class="app"><aside class="sidebar"><div class="brand"><div class="mark">↗</div><div><strong>nextoffer</strong><small>YOUR CAREER QUEST</small></div></div><div class="nav-section">Your workspace</div><nav id="nav">
 <button class="nav-button active" data-page="today"><span class="ico">◫</span> Today</button>
 <button class="nav-button" data-page="roadmap"><span class="ico">◇</span> Learning roadmap</button>
+<button class="nav-button" data-page="finder"><span class="ico">◎</span> Internship Finder</button>
 <button class="nav-button" data-page="applications"><span class="ico">✉</span> Applications</button>
 <button class="nav-button" data-page="interviews"><span class="ico">◷</span> Interview lab</button>
 <button class="nav-button" data-page="projects"><span class="ico">▣</span> Projects</button>
@@ -441,7 +442,7 @@ ${last?`<div class="info" style="margin:12px 0">Latest score: <strong>${last.cor
 ${last?`<div style="margin-top:14px"><div class="mini-title">Your answer review</div>${last.review.map((it,i)=>`<div class="quiz-feedback ${it.ok?'good':'bad'}"><strong>${it.ok?'✓':'Review'} Question ${i+1}:</strong> ${esc(it.why)}${!it.ok?`<div><strong>Correct:</strong> ${esc(it.correctLabel)}</div>`:''}</div>`).join('')}</div>`:''}
 <p class="muted" style="font-size:11px;margin-top:12px">This practice checks multiple-choice reasoning, not live Python or SQL execution. Use the linked hands-on resources for written code, and log spoken mocks separately.</p></div>`;}
 
-function render(){lastRenderDay=today();document.querySelectorAll('.nav-button').forEach(n=>n.classList.toggle('active',n.dataset.page===page));document.getElementById('date-label').textContent=`${longDate(today()).toUpperCase()} · DAY ${dayNum()+1}`;document.getElementById('level-chip').textContent=`✦ LEVEL ${level()}`;document.getElementById('streak-chip').textContent=`🔥 ${getStreak()} ${plural(getStreak(),'day')} streak`;const view={today:homeView,roadmap:roadmapView,applications:applicationsView,interviews:interviewsView,projects:projectsView,resources:resourcesView,settings:settingsView};document.getElementById('view').innerHTML=(view[page]||homeView)()+`<div id="toast" class="alert hide" role="status"></div>`;if(page==='interviews')updateTimer();}
+function render(){lastRenderDay=today();document.querySelectorAll('.nav-button').forEach(n=>n.classList.toggle('active',n.dataset.page===page));document.getElementById('date-label').textContent=`${longDate(today()).toUpperCase()} · DAY ${dayNum()+1}`;document.getElementById('level-chip').textContent=`✦ LEVEL ${level()}`;document.getElementById('streak-chip').textContent=`🔥 ${getStreak()} ${plural(getStreak(),'day')} streak`;const view={today:homeView,roadmap:roadmapView,finder:()=>window.NextOfferJobs?.view()||"<div class=\"card\">Loading internship finder...</div>",applications:applicationsView,interviews:interviewsView,projects:projectsView,resources:resourcesView,settings:settingsView};document.getElementById('view').innerHTML=(view[page]||homeView)()+`<div id="toast" class="alert hide" role="status"></div>`;if(page==='interviews')updateTimer();}
 function formatTimer(s){s=Math.max(0,Math.ceil(s));return`${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`}
 function updateTimer(){if(timer.running)timer.seconds=Math.max(0,Math.ceil((timer.end-Date.now())/1000));const t=document.getElementById('timer-screen');if(t)t.textContent=formatTimer(timer.seconds);if(timer.running&&timer.seconds===0){timer.running=false;clearInterval(tick);if(t)t.textContent='00:00';showToast('Time is up. Log your interview reflection!')}}
 function timerAction(cmd){if(cmd==='reset'){clearInterval(tick);timer.running=false;timer.seconds=state.settings.interviewMins*60}else if(cmd==='pause'){if(timer.running)timer.seconds=Math.max(0,Math.ceil((timer.end-Date.now())/1000));clearInterval(tick);timer.running=false}else if(cmd==='start'&&!timer.running){if(timer.seconds<=0)timer.seconds=state.settings.interviewMins*60;timer.end=Date.now()+timer.seconds*1000;timer.running=true;tick=setInterval(updateTimer,1000)}updateTimer()}
@@ -503,4 +504,5 @@ window.addEventListener('focus',()=>{if(today()!==lastRenderDay)render()});
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="cloud.js"></script>
+<script src="job-finder.js"></script>
 </body></html>
