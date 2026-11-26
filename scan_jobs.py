@@ -20,7 +20,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / 'jobs' / 'feed.json'
 BASE = 'https://raw.githubusercontent.com/'
-USER_AGENT = 'NextOffer-InternshipFinder/1.0 (public GitHub boards; 3-hour schedule)'
+USER_AGENT = 'NextOffer-InternshipFinder/2.0 (public GitHub boards; 20-minute schedule)'
 SOURCES = [
     ('Dreamwork Business', 'json', 'dreamworkhq/Tech-Internships-2027/main/data/business-listings.json'),
     ('Dreamwork International', 'json', 'dreamworkhq/Tech-Internships-2027/main/data/international-listings.json'),
@@ -29,6 +29,7 @@ SOURCES = [
     ('2027 Tech Jobs Off-Cycle', 'markdown', 'aprameyak/2027-tech-jobs/main/OFFCYCLE.md'),
     ('2027 Tech Jobs Summer', 'markdown', 'aprameyak/2027-tech-jobs/main/SUMMER.md'),
     ('2027 Product Data Business', 'markdown', 'yt6363/summer-2027-internships/main/README.md'),
+    ('ApplyGuy Verified Internships', 'json', 'ApplyGuy/2027-Internships/main/data/internships.json'),
     ('European Opportunities', 'json', 'https://techopportunities.eu/open-opportunities.json'),
 ]
 ROLE = re.compile(r'\b(data\s+(?:analytic\w*|analys\w*|science|scientist|insight\w*|engineer\w*|operations)|analytics?|business\s+(?:intelligence|analys\w*|insights?|operations?|strategy)|BI\b|intelligence|insights?|reporting|product\s+(?:analytic\w*|analys\w*|manag\w*|operations?|strateg\w*)|technical\s+program|program\s+manag\w*|project\s+manag\w*|project\s+coordinat\w*|operations?\s+(?:analys\w*|research|strateg\w*|intern)|decision\s+science|marketing\s+analytic\w*|growth\s+analys\w*|customer\s+(?:analys\w*|insights?)|supply\s+chain\s+analys\w*|financial\s+analys\w*|research\s+analys\w*|ai\s+product|business\s+systems)\b', re.I)
@@ -104,17 +105,65 @@ def key_for(company, title, location):
     return hashlib.sha1(f'{norm(company)}|{norm(title)}|{norm(location)}'.encode()).hexdigest()[:18]
 
 
-def make_job(title, company, location, url, source, source_url, posted_at='', context='', education='', description='', code=''):
+def parse_board_date(raw, origin='board-reported'):
+    """Best-effort UTC timestamp + date precision. Never pass a date-added field as an exact posting time.
+
+    Precision is instant, hour, day or unknown. Relative dates are board estimates.
+    For board-added dates the timestamp means board entry date, not employer publication.
+    """
+    original = clean(raw)[:60]
+    if not original: return '', 'unknown', 'unknown'
+    t = dt.datetime.now(dt.timezone.utc)
+    # Full timezone-aware timestamp. Raw ISO strings without timezones are treated as UTC.
+    try:
+        if re.match(r'^\d{4}-\d\d-\d\d[Tt ]\d\d:', original):
+            obj = dt.datetime.fromisoformat(original.replace('Z', '+00:00'))
+            if obj.tzinfo is None: obj = obj.replace(tzinfo=dt.timezone.utc)
+            return obj.astimezone(dt.timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z'), 'instant', origin
+    except (ValueError, OverflowError): pass
+    # Relative ages on GitHub boards: e.g. 20m, 2h, 3d, 2w. Only hour/minute has hourly precision.
+    match = re.fullmatch(r'(\d{1,3})\s*(m|min|h|hr|d|day|w|wk)s?', original, re.I)
+    if match:
+        amount=int(match.group(1));unit=match.group(2).lower()[0]
+        if unit=='m': delta=dt.timedelta(minutes=amount)
+        elif unit=='h': delta=dt.timedelta(hours=amount)
+        elif unit=='d': delta=dt.timedelta(days=amount)
+        else: delta=dt.timedelta(weeks=amount)
+        stamp=(t-delta).isoformat(timespec='seconds').replace('+00:00','Z')
+        return stamp, ('hour' if unit in ('m','h') else 'day'), origin+'-relative'
+    if re.fullmatch(r'\d{4}-\d\d-\d\d', original):
+        try:
+            d=dt.date.fromisoformat(original)
+            # Midnight is a placeholder; NEVER treat day-only precision as under one hour.
+            return d.isoformat()+'T00:00:00Z','day',origin
+        except ValueError: pass
+    # e.g. Nov 23, Nov 23 2026. GitHub uses "Date Added" not employer posted.
+    match=re.fullmatch(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?',original,re.I)
+    if match:
+        mo={k:i for i,k in enumerate(('jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'),1)}[match.group(1)[:3].lower()]
+        year=int(match.group(3) or t.year)
+        try:
+            d=dt.date(year,mo,int(match.group(2)))
+            if not match.group(3) and d>t.date()+dt.timedelta(days=2):d=d.replace(year=year-1)
+            return d.isoformat()+'T00:00:00Z','day',origin
+        except ValueError:pass
+    return '', 'unknown', 'unknown'
+
+
+def make_job(title, company, location, url, source, source_url, posted_at='', context='', education='', description='', code='', date_basis='board-reported'):
     title, company, location = clean(title), clean(company), clean(location)
     url = normalized_url(url)
     if not title or not company or not url or not included(title,context): return None
     if not location: location = 'Location not listed'
+    stamp,precision,basis=parse_board_date(posted_at,date_basis)
     return {
         'id': key_for(company,title,location),
         'title': title, 'company': company, 'location': location,
         'term': term_for(title, context, source),
         'url': url, 'source': source, 'source_url': source_url,
-        'posted_at': str(posted_at or '')[:28],
+        'posted_at': stamp,
+        'posted_at_raw': clean(posted_at)[:60],
+        'date_precision': precision, 'date_basis': basis,
         'education': clean(education),
         'description': clean(description)[:240],
         'country_code': code or '',
@@ -124,7 +173,7 @@ def make_job(title, company, location, url, source, source_url, posted_at='', co
 
 def json_jobs(text, source, source_url):
     parsed = json.loads(text)
-    listings = parsed.get('listings', []) if isinstance(parsed, dict) else parsed
+    listings = (parsed.get('listings') if parsed.get('listings') is not None else parsed.get('jobs',[])) if isinstance(parsed, dict) else parsed
     if not isinstance(listings, list): raise ValueError('JSON has no listings array')
     jobs = []
     for row in listings:
@@ -134,13 +183,14 @@ def json_jobs(text, source, source_url):
             row.get('title') or row.get('role') or row.get('position'),
             row.get('company') or row.get('companyName'),
             row.get('location') or row.get('locations'),
-            row.get('url') or row.get('link') or row.get('apply_url') or row.get('application_url'),
+            row.get('listingUrl') or row.get('url') or row.get('link') or row.get('apply_url') or row.get('application_url'),
             source,source_url,
-            row.get('postedAt') or row.get('posted_at') or row.get('firstIndexedAt') or '',
+            row.get('postedAt') or row.get('posted_at') or row.get('posted') or row.get('firstIndexedAt') or '',
             row.get('term') or row.get('season') or row.get('start_date') or row.get('employment_type') or 'internship',
             row.get('education') or '',
             row.get('description') or '',
             row.get('locationCountryCode') or '',
+            ('source-reported' if row.get('postedAt') or row.get('posted_at') or row.get('posted') else 'board-indexed'),
         )
         if job: jobs.append(job)
     return jobs
@@ -170,7 +220,7 @@ def markdown_jobs(text, source, source_url):
         # Any rich markdown list typically has a link to the exact job.
         education = next((clean(c) for c in cells[3:] if re.search(r'undergrad|bachelor|master|phd|degree',c,re.I)), '')
         date = next((clean(c) for c in reversed(cells[3:]) if re.search(r'\b(?:\d+[dwhm]|\d{4}-\d\d-\d\d|nov|dec|oct|sep)\b', c, re.I)), '')
-        job = make_job(role, company, loc, url,source,source_url,date,headings,education)
+        job = make_job(role, company, loc, url,source,source_url,date,headings,education,date_basis=('board-added' if '2027 Tech Jobs' in source else 'board-reported'))
         if job: out.append(job)
     return out
 
@@ -223,11 +273,12 @@ def main():
         if age<=72*3600:
             found[job_id] = dict(job, stale=True)
     jobs=list(found.values())
-    # Prioritize fresh spring/offcycle, then latest records, then summer.
-    jobs.sort(key=lambda j:(j.get('term')=='Spring / off-cycle',j.get('posted_at',''),j.get('title','')),reverse=True)
+    # Prioritize newly indexed and recent source-reported postings, keeping Spring prominent.
+    jobs.sort(key=lambda j:(j.get('first_seen',''),j.get('posted_at',''),j.get('term')=='Spring / off-cycle'),reverse=True)
     jobs=jobs[:3000]
-    feed={'version':1,'generated_at':current,'scan_every_hours':3,'total':len(jobs),
-          'new_count':sum(j['id'] not in old_by_id for j in jobs),
+    new_ids=[j['id'] for j in jobs if j['id'] not in old_by_id]
+    feed={'version':2,'generated_at':current,'scan_every_minutes':20,'total':len(jobs),
+          'new_count':len(new_ids), 'new_ids':new_ids,
           'source_status':source_status,'jobs':jobs}
     OUT.parent.mkdir(parents=True,exist_ok=True)
     OUT.write_text(json.dumps(feed,ensure_ascii=False,separators=(',',':'))+'\n',encoding='utf-8')
